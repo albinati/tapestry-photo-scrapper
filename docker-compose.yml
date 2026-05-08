@@ -26,11 +26,11 @@ services:
       - /srv/tapestry/.env:/app/.env:ro
       - /srv/tapestry/config.toml:/app/config.toml:ro
       - /srv/tapestry/data:/app/data
-      # OAuth client (read-only) and user-token directory (read-write).
-      # Edit these to match your host. If you also run OpenClaw, point
-      # them at OpenClaw's existing token paths so its refresh logic
-      # keeps the upload script working.
-      - /srv/tapestry/secrets/credentials.json:/secrets/credentials.json:ro
-      - /srv/tapestry/secrets/token-dir:/secrets/token-dir:rw
+      # Google authorized-user token, owned and refreshed by another
+      # process (e.g. an OpenClaw weekly cron). Read-only — we never
+      # write to it, just consume it via google-auth's
+      # Credentials.from_authorized_user_file(). Adjust the host path
+      # to wherever your token lives.
+      - /root/.openclaw/workspace/credentials/gmail-token.json:/secrets/openclaw/gmail-token.json:ro
     environment:
       - TZ=Europe/London

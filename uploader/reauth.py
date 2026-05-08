@@ -1,12 +1,16 @@
 #!/usr/bin/env python3
-"""Re-auth Google to add photoslibrary.appendonly. Local-loopback redirect.
+"""Bootstrap Google OAuth token with the scopes this pipeline needs.
 
-Starts a tiny HTTP server on 127.0.0.1:<port>, prints (and writes to a file)
-the authorization URL, waits for the browser to redirect back with ?code=...,
-exchanges it for tokens, and writes ~/.config/google/token.json.
+ONLY use this for first-time setup of a standalone install. If you're
+sharing a token with another service that owns its lifecycle (e.g. an
+OpenClaw weekly renewal cron), DO NOT run this — it will overwrite their
+token and break that service. The upload script doesn't need this script
+at runtime; it consumes whichever token `config.toml`'s `token_path`
+points at.
 
-No stdin needed — open the URL once in your browser; the server takes it
-from there.
+Starts a tiny HTTP server on 127.0.0.1:<port>, prints the authorization
+URL, waits for the browser to redirect back with ?code=..., exchanges
+it for tokens, and writes the token at ~/.config/google/token.json.
 """
 import http.server
 import json

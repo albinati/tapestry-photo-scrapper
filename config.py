@@ -101,9 +101,9 @@ class Config:
         # Google Photos
         gp = cfg.get("google_photos", {})
         self.album_title: str = gp.get("album_title", "Tapestry")
-        self.google_credentials: pathlib.Path = pathlib.Path(
-            os.path.expanduser(gp.get("credentials_path", "~/.config/google/credentials.json"))
-        )
+        # Token must be in google-auth "authorized user" format — that
+        # format embeds client_id/client_secret, so a separate
+        # credentials.json is no longer required.
         self.google_token: pathlib.Path = pathlib.Path(
             os.path.expanduser(gp.get("token_path", "~/.config/google/token.json"))
         )

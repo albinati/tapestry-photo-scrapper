@@ -31,13 +31,17 @@ dob      = "2022-07-30"
 # folder   = "FirstName"
 
 [google_photos]
-album_title       = "Tapestry"
-credentials_path  = "~/.config/google/credentials.json"
-token_path        = "~/.config/google/token.json"
+album_title    = "Tapestry"
+# Path to a google-auth "authorized user" JSON token (the format produced
+# by Credentials.to_authorized_user_info() — has token, refresh_token,
+# client_id, client_secret, scopes embedded). The script reads this file
+# and refreshes the access_token in-memory, but never writes back to it,
+# so this can safely be a token managed by another process.
+token_path     = "~/.config/google/token.json"
 # Observations authored by these names are skipped during upload — typically
 # parents whose photos are already in other Google Photos albums uploaded
 # directly from a phone.
-family_authors    = []
+family_authors = []
 
 [scraper]
 # Optional safety floor: never fetch observations whose createdAt is older

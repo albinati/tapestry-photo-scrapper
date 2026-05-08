@@ -21,6 +21,8 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 import requests
+from google.auth.transport.requests import Request
+from google.oauth2.credentials import Credentials
 
 import config
 
@@ -33,30 +35,29 @@ DOBS = {c.folder: c.dob for c in CFG.children}
 DISPLAY_NAMES = {c.folder: c.display for c in CFG.children}
 
 TOKEN_FILE = CFG.google_token
-CREDS_FILE = CFG.google_credentials
 ALBUM_TITLE = CFG.album_title
 FAMILY_AUTHORS = CFG.family_authors
 
 # ── Helpers ───────────────────────────────────────────────────────────────────
 
-def get_access_token():
-    with open(TOKEN_FILE) as f:
-        t = json.load(f)
-    with open(CREDS_FILE) as f:
-        c = json.load(f)
-    # Always refresh
-    r = requests.post("https://oauth2.googleapis.com/token", data={
-        "client_id": c["client_id"],
-        "client_secret": c["client_secret"],
-        "refresh_token": t["refresh_token"],
-        "grant_type": "refresh_token",
-    })
-    r.raise_for_status()
-    access_token = r.json()["access_token"]
-    t["access_token"] = access_token
-    with open(TOKEN_FILE, "w") as f:
-        json.dump(t, f, indent=2)
-    return access_token
+def get_access_token() -> str:
+    """Read the OpenClaw-managed authorized-user JSON, refresh in-memory if
+    needed, return a valid access_token. Does NOT write back to the token
+    file — OpenClaw owns its lifecycle and runs a weekly cron to re-issue
+    when the refresh_token is revoked (GCP project is in Testing mode).
+    """
+    creds = Credentials.from_authorized_user_file(str(TOKEN_FILE))
+    if not creds.valid:
+        try:
+            creds.refresh(Request())
+        except Exception as e:
+            raise RuntimeError(
+                "Google token refresh failed (refresh_token may be revoked). "
+                "Wait for OpenClaw's weekly renewal cron (Mon 10 AM London) or "
+                "ping Luis to run reauth.py renew personal manually. "
+                f"Underlying error: {e}"
+            ) from e
+    return creds.token
 
 
 def age_str(dob: date, photo_date: date) -> str:
@@ -264,46 +265,42 @@ def generate_description(child: str, photo_date: date, notes: str, comments: str
     return desc[:1000]
 
 
-def list_albums(token: str) -> list:
-    """List ALL app-created albums, paginated. Requires
-    photoslibrary.readonly.appcreateddata."""
-    headers = {"Authorization": f"Bearer {token}"}
-    out = []
-    page_token = None
-    while True:
-        params = {"pageSize": 50}
-        if page_token:
-            params["pageToken"] = page_token
-        r = requests.get("https://photoslibrary.googleapis.com/v1/albums",
-                         headers=headers, params=params)
-        if not r.ok:
-            print(f"  albums.list failed: {r.status_code} {r.text[:200]}")
-            return out
-        j = r.json()
-        out.extend(j.get("albums", []))
-        page_token = j.get("nextPageToken")
-        if not page_token:
-            return out
+def _read_state() -> dict:
+    if CFG.state_file.exists():
+        try:
+            return json.loads(CFG.state_file.read_text())
+        except Exception:
+            return {}
+    return {}
 
 
-def find_album_id(token: str, title: str) -> str | None:
-    for a in list_albums(token):
-        if a.get("title") == title:
-            return a["id"]
-    return None
+def _write_state(state: dict) -> None:
+    CFG.state_file.write_text(json.dumps(state, indent=2))
 
 
 def get_or_create_album(token: str, title: str) -> str:
-    headers = {"Authorization": f"Bearer {token}"}
-    existing = find_album_id(token, title)
-    if existing:
-        print(f"  Found existing album '{title}': {existing[:20]}...")
-        return existing
+    """Return the persistent album_id for `title`, creating it once if needed.
+
+    Google Photos API can no longer enumerate albums for unverified apps
+    (GET /v1/albums → 403, even with photoslibrary.readonly), so we don't
+    look it up by title. Instead the id is recorded in state.json on
+    first creation and reused thereafter.
+    """
+    state = _read_state()
+    album_id = state.get("google_photos_album_id")
+    if album_id:
+        print(f"  Reusing album_id from state.json: {album_id[:20]}...")
+        return album_id
+
+    headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     r = requests.post("https://photoslibrary.googleapis.com/v1/albums",
-        headers=headers, json={"album": {"title": title}})
+                      headers=headers, json={"album": {"title": title}})
     r.raise_for_status()
     album_id = r.json()["id"]
-    print(f"  Created album '{title}': {album_id[:20]}...")
+    print(f"  Created new album '{title}': {album_id[:20]}...")
+    state["google_photos_album_id"] = album_id
+    state["google_photos_album_created_at"] = datetime.now(timezone.utc).isoformat()
+    _write_state(state)
     return album_id
 
 
