@@ -1,20 +1,26 @@
-# Production deploy on a Docker host (e.g. Hetzner).
+# Production deploy on a Docker host.
 #
-# Host layout (assumed):
-#   /srv/tapestry/
-#     ├── .env           — Tapestry login (TAPESTRY_EMAIL / TAPESTRY_PASSWORD)
-#     ├── config.toml    — children, school slug, family-author skip list,
-#     │                    google_photos.credentials_path / token_path
-#     │                    (paths inside the container, e.g. /secrets/...)
-#     └── data/          — runtime: state.json, scrape_summary.json,
-#                          tapestry-photos/<child>/, tapestry-diary/<child>/
-#
-# Adjust the two OAuth bind mounts below to wherever your Google
-# credentials live on the host. The token directory must be writable
-# (the uploader rotates the access_token in place).
+# Layout assumed under /srv/tapestry on the host:
+#   .env           — Tapestry login (TAPESTRY_EMAIL / TAPESTRY_PASSWORD)
+#   config.toml    — children, school slug, family-author skip list,
+#                    google_photos.token_path (= /secrets/token.json
+#                    inside the container, by default)
+#   data/          — runtime: state.json, scrape_summary.json,
+#                    tapestry-photos/<child>/, tapestry-diary/<child>/
+#   secrets/
+#     token.json   — Google authorized-user token (the file produced by
+#                    `python3 uploader/reauth.py`, or maintained by
+#                    whatever refresh mechanism you set up). Can be a
+#                    regular file or a symlink to a token managed by
+#                    another service. Read-only inside the container —
+#                    we never write back to it.
 #
 # Trigger a run:
 #   docker exec tapestry bash /app/run_all.sh
+#
+# See README.md for the full OAuth setup walkthrough and notes on token
+# refresh strategies (Testing-mode projects revoke refresh tokens after
+# ~7 days; you'll want some kind of periodic re-auth).
 
 services:
   tapestry:
@@ -23,14 +29,9 @@ services:
     restart: unless-stopped
     user: "1001:1001"
     volumes:
-      - /srv/tapestry/.env:/app/.env:ro
-      - /srv/tapestry/config.toml:/app/config.toml:ro
-      - /srv/tapestry/data:/app/data
-      # Google authorized-user token, owned and refreshed by another
-      # process (e.g. an OpenClaw weekly cron). Read-only — we never
-      # write to it, just consume it via google-auth's
-      # Credentials.from_authorized_user_file(). Adjust the host path
-      # to wherever your token lives.
-      - /root/.openclaw/workspace/credentials/gmail-token.json:/secrets/openclaw/gmail-token.json:ro
+      - ./.env:/app/.env:ro
+      - ./config.toml:/app/config.toml:ro
+      - ./data:/app/data
+      - ./secrets/token.json:/secrets/token.json:ro
     environment:
       - TZ=Europe/London

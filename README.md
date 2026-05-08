@@ -25,57 +25,87 @@ I built this to handle my own kids' nursery records. It's working code, not a po
 
 Requirements: Python 3.11+ (for stdlib `tomllib`), or Docker. A Google Cloud project with the Photos Library API enabled.
 
-### Option A — Docker (recommended for servers)
+### 1. Google OAuth (one-time)
 
-A multi-arch image is published to GHCR on every push to `main`. On the host:
+You need a Google OAuth client and a token granting the Photos Library scopes.
+
+1. **Create a Google Cloud project** at https://console.cloud.google.com (or use an existing one). Enable the **Photos Library API** under *APIs & Services → Library*.
+
+2. **Create an OAuth client** under *APIs & Services → Credentials*. Either application type works:
+   - **Desktop app** — simplest. Loopback redirect (`http://localhost`) on any port is allowed automatically.
+   - **Web application** — requires you to register specific redirect URIs (e.g. `http://localhost:8080/`). Pick this if you want strict-mode browsers / Google's stricter handling, or if you're sharing the client with another service.
+
+   Either way, download the client JSON.
+
+3. **Required scopes** for this pipeline:
+   - `https://www.googleapis.com/auth/photoslibrary.appendonly` — upload media and add to app-created albums.
+   - `https://www.googleapis.com/auth/photoslibrary.edit.appcreateddata` — patch descriptions, remove items from album.
+   - `https://www.googleapis.com/auth/photoslibrary.readonly` — read media items in known album ids (used for dedup against album contents).
+
+   > **API quirk**: post-March 2025, even tokens holding `photoslibrary.readonly` get a `403 PERMISSION_DENIED` on `GET /v1/albums` for unverified apps. So this pipeline does **not** enumerate albums by title — it creates the album once, persists the `album_id` in `state.json`, and reuses it on every subsequent run.
+
+4. **Get a token**. The bundled `uploader/reauth.py` does the OAuth dance — it starts a local HTTP server, opens a browser, captures the redirect, and writes the token in google-auth `authorized_user` format (the format `Credentials.to_authorized_user_info()` produces — embeds `client_id`/`client_secret`/`refresh_token`/`scopes`):
+
+   ```bash
+   pip install -r requirements.txt
+   # Place the OAuth client JSON at ~/.config/google/credentials.json (the
+   # script flattens `installed:`/`web:` wrappers automatically)
+   python3 uploader/reauth.py
+   ```
+
+   The token is written to `~/.config/google/token.json`.
+
+5. **Token refresh strategy** — pick one:
+   - **Trusted Tester / unverified app in Testing mode**: refresh tokens revoke after **~7 days**. Either publish the OAuth consent screen (review can take days) or set up a weekly cron that re-runs `reauth.py` and notifies you to click an auth link. This pipeline assumes the token is kept fresh by *something* and never writes back to it.
+   - **Verified or Internal app**: refresh tokens are long-lived; one-time setup.
+
+### 2. Configure
 
 ```bash
-mkdir -p /srv/tapestry/{data,secrets}
-cp .env.example /srv/tapestry/.env                       # fill in
-cp config.example.toml /srv/tapestry/config.toml         # fill in
-cp docker-compose.yml /srv/tapestry/docker-compose.yml   # adjust volume paths if needed
+cp .env.example .env                  # TAPESTRY_EMAIL / TAPESTRY_PASSWORD
+cp config.example.toml config.toml    # school_slug, children, family authors,
+                                      # google_photos.token_path
+```
 
-# Place OAuth client + token where docker-compose.yml expects them:
-#   /srv/tapestry/secrets/credentials.json  (read-only)
-#   /srv/tapestry/secrets/token-dir/token.json  (writable — token rotates)
+### 3. Run
+
+#### Option A — Docker (recommended for servers)
+
+A multi-arch image is published to `ghcr.io/albinati/tapestry-photo-scrapper:main` on every push.
+
+```bash
+# On the host, e.g. /srv/tapestry/
+mkdir -p /srv/tapestry/{data,secrets}
+cp .env config.toml docker-compose.yml /srv/tapestry/
+
+# Either copy the token file directly:
+cp ~/.config/google/token.json /srv/tapestry/secrets/token.json
+# OR symlink it from wherever your refresh mechanism owns it:
+# ln -s /path/to/managed-token.json /srv/tapestry/secrets/token.json
+
+# Make the data/ and token writable by uid 1001 (the container's user):
+chown -R 1001:1001 /srv/tapestry/data /srv/tapestry/secrets
 
 cd /srv/tapestry && docker compose pull && docker compose up -d
 ```
 
-Trigger a run:
+Trigger a run on demand:
 
 ```bash
 docker exec tapestry bash /app/run_all.sh
 ```
 
-The container is long-running but idle (`sleep infinity`) — invocations come in via `docker exec`. Set up a cron, an OpenClaw watcher, or call it manually whenever a Tapestry email lands.
+The container is long-running but idle (`sleep infinity`); each invocation runs as `docker exec`. Wire it up to whatever trigger fits — a daily cron, an inbox watcher (Tapestry sends a daily summary mail with `<author> added observation <title>` lines you can pattern-match on), a webhook, etc.
 
-### Option B — Bare-metal
+#### Option B — Bare-metal
 
 ```bash
 git clone https://github.com/albinati/tapestry-photo-scrapper.git
 cd tapestry-photo-scrapper
 pip install -r requirements.txt
-
-cp .env.example .env                 # fill in Tapestry email + password
-cp config.example.toml config.toml   # fill in school slug, children, family authors
+# (config.toml + .env + Google token already set up above)
+bash run_all.sh
 ```
-
-Place your Google OAuth client (from a Desktop app type in Google Cloud Console) at `~/.config/google/credentials.json`. Then run a one-time auth:
-
-```bash
-python3 uploader/reauth.py
-```
-
-It opens a browser, you consent to the requested scopes, the script captures the redirect on a local loopback port and writes `~/.config/google/token.json`.
-
-The required scopes are:
-
-- `https://www.googleapis.com/auth/photoslibrary.appendonly` — upload + add to app-created albums.
-- `https://www.googleapis.com/auth/photoslibrary.edit.appcreateddata` — patch descriptions, remove items from album.
-- `https://www.googleapis.com/auth/photoslibrary.readonly.appcreateddata` — list app-created albums and items in them.
-
-> **Note**: the broader `photoslibrary.readonly` scope is deprecated as of 2025 and now returns 403 even on tokens that have it. Use `readonly.appcreateddata` instead.
 
 ## Running
 
