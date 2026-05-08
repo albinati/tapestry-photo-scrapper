@@ -1,0 +1,36 @@
+# Production deploy on a Docker host (e.g. Hetzner).
+#
+# Host layout (assumed):
+#   /srv/tapestry/
+#     ├── .env           — Tapestry login (TAPESTRY_EMAIL / TAPESTRY_PASSWORD)
+#     ├── config.toml    — children, school slug, family-author skip list,
+#     │                    google_photos.credentials_path / token_path
+#     │                    (paths inside the container, e.g. /secrets/...)
+#     └── data/          — runtime: state.json, scrape_summary.json,
+#                          tapestry-photos/<child>/, tapestry-diary/<child>/
+#
+# Adjust the two OAuth bind mounts below to wherever your Google
+# credentials live on the host. The token directory must be writable
+# (the uploader rotates the access_token in place).
+#
+# Trigger a run:
+#   docker exec tapestry bash /app/run_all.sh
+
+services:
+  tapestry:
+    image: ghcr.io/albinati/tapestry-photo-scrapper:main
+    container_name: tapestry
+    restart: unless-stopped
+    user: "1001:1001"
+    volumes:
+      - /srv/tapestry/.env:/app/.env:ro
+      - /srv/tapestry/config.toml:/app/config.toml:ro
+      - /srv/tapestry/data:/app/data
+      # OAuth client (read-only) and user-token directory (read-write).
+      # Edit these to match your host. If you also run OpenClaw, point
+      # them at OpenClaw's existing token paths so its refresh logic
+      # keeps the upload script working.
+      - /srv/tapestry/secrets/credentials.json:/secrets/credentials.json:ro
+      - /srv/tapestry/secrets/token-dir:/secrets/token-dir:rw
+    environment:
+      - TZ=Europe/London

@@ -23,12 +23,39 @@ I built this to handle my own kids' nursery records. It's working code, not a po
 
 ## Setup
 
-Requirements: Python 3.11+ (uses `tomllib` from stdlib), and a Google Cloud project with the Photos Library API enabled.
+Requirements: Python 3.11+ (for stdlib `tomllib`), or Docker. A Google Cloud project with the Photos Library API enabled.
+
+### Option A — Docker (recommended for servers)
+
+A multi-arch image is published to GHCR on every push to `main`. On the host:
+
+```bash
+mkdir -p /srv/tapestry/{data,secrets}
+cp .env.example /srv/tapestry/.env                       # fill in
+cp config.example.toml /srv/tapestry/config.toml         # fill in
+cp docker-compose.yml /srv/tapestry/docker-compose.yml   # adjust volume paths if needed
+
+# Place OAuth client + token where docker-compose.yml expects them:
+#   /srv/tapestry/secrets/credentials.json  (read-only)
+#   /srv/tapestry/secrets/token-dir/token.json  (writable — token rotates)
+
+cd /srv/tapestry && docker compose pull && docker compose up -d
+```
+
+Trigger a run:
+
+```bash
+docker exec tapestry bash /app/run_all.sh
+```
+
+The container is long-running but idle (`sleep infinity`) — invocations come in via `docker exec`. Set up a cron, an OpenClaw watcher, or call it manually whenever a Tapestry email lands.
+
+### Option B — Bare-metal
 
 ```bash
 git clone https://github.com/albinati/tapestry-photo-scrapper.git
 cd tapestry-photo-scrapper
-pip install requests beautifulsoup4 lxml google-auth-oauthlib
+pip install -r requirements.txt
 
 cp .env.example .env                 # fill in Tapestry email + password
 cp config.example.toml config.toml   # fill in school slug, children, family authors
