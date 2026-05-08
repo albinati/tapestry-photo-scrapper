@@ -54,8 +54,12 @@ LABEL org.opencontainers.image.source="https://github.com/albinati/tapestry-phot
 
 USER tapestry
 
-# Long-running idle container — invocations via `docker exec`:
-#   docker exec tapestry bash /app/run_all.sh
-# (one-shot use also works: docker run --rm ... bash /app/run_all.sh)
+# Default invocation runs the full pipeline once and exits. This is a
+# batch job, not a long-running service — there's no idle state to keep.
+# Trigger from the host:
+#   docker compose run --rm tapestry
+# Override the command for one-offs:
+#   docker compose run --rm tapestry python3 scraper.py
+#   docker compose run --rm tapestry bash    # ad-hoc shell
 ENTRYPOINT ["/usr/bin/tini", "--"]
-CMD ["sleep", "infinity"]
+CMD ["bash", "/app/run_all.sh"]

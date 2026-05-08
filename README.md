@@ -83,19 +83,27 @@ cp ~/.config/google/token.json /srv/tapestry/secrets/token.json
 # OR symlink it from wherever your refresh mechanism owns it:
 # ln -s /path/to/managed-token.json /srv/tapestry/secrets/token.json
 
-# Make the data/ and token writable by uid 1001 (the container's user):
+# Make data and secrets readable by uid 1001 (the container's user):
 chown -R 1001:1001 /srv/tapestry/data /srv/tapestry/secrets
 
-cd /srv/tapestry && docker compose pull && docker compose up -d
+cd /srv/tapestry && docker compose pull
 ```
 
 Trigger a run on demand:
 
 ```bash
-docker exec tapestry bash /app/run_all.sh
+docker compose -f /srv/tapestry/docker-compose.yml run --rm tapestry
 ```
 
-The container is long-running but idle (`sleep infinity`); each invocation runs as `docker exec`. Wire it up to whatever trigger fits — a daily cron, an inbox watcher (Tapestry sends a daily summary mail with `<author> added observation <title>` lines you can pattern-match on), a webhook, etc.
+That spins up an ephemeral container, runs the pipeline once, and removes itself — **zero idle footprint**, no `docker ps` clutter. Hardening included in the compose file: read-only root filesystem, all Linux capabilities dropped, `no-new-privileges`, journald logging, 256 MB memory ceiling.
+
+Wire the trigger up to whatever fits: a daily cron, an inbox watcher (Tapestry sends a daily summary mail with `<author> added observation <title>` lines you can pattern-match on), a webhook, etc.
+
+Run a one-off shell in the same environment:
+
+```bash
+docker compose run --rm tapestry bash
+```
 
 #### Option B — Bare-metal
 

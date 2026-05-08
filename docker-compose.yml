@@ -1,4 +1,8 @@
-# Production deploy on a Docker host.
+# One-shot batch job. There's no long-running service — each invocation
+# spins up an ephemeral container, runs the pipeline, exits.
+#
+# Trigger from the host:
+#   docker compose -f /srv/tapestry/docker-compose.yml run --rm tapestry
 #
 # Layout assumed under /srv/tapestry on the host:
 #   .env           — Tapestry login (TAPESTRY_EMAIL / TAPESTRY_PASSWORD)
@@ -10,34 +14,55 @@
 #   secrets/
 #     token.json   — Google authorized-user token (the file produced by
 #                    `python3 uploader/reauth.py`, or maintained by
-#                    whatever refresh mechanism you set up). Can be a
-#                    regular file or a symlink to a token managed by
-#                    another service. Read-only inside the container —
-#                    we never write back to it.
-#
-# Trigger a run:
-#   docker exec tapestry bash /app/run_all.sh
+#                    whatever refresh mechanism you set up). Read-only
+#                    inside the container — we never write back to it.
 #
 # See README.md for the full OAuth setup walkthrough and notes on token
 # refresh strategies (Testing-mode projects revoke refresh tokens after
-# ~7 days; you'll want some kind of periodic re-auth).
+# ~7 days).
 
 services:
   tapestry:
     image: ghcr.io/albinati/tapestry-photo-scrapper:main
-    container_name: tapestry
-    restart: unless-stopped
     user: "1001:1001"
+    # `--rm` from the trigger removes the container after each run.
+    # `restart: "no"` ensures `docker compose up -d` (if invoked by
+    # mistake) doesn't restart on exit.
+    restart: "no"
+
     volumes:
       - ./.env:/app/.env:ro
       - ./config.toml:/app/config.toml:ro
       - ./data:/app/data
       # Bind the secrets *directory*, not the single token.json file:
       # docker caches a single-file bind-mount's inode, so an external
-      # refresh process that rewrites the file (atomic replace, common
-      # for token rotators) would be invisible to the container. Mounting
-      # the directory means each read inside the container resolves the
-      # path fresh.
+      # rotator that atomic-replaces the token file would be invisible
+      # to the container. Mounting the parent directory means each
+      # `docker compose run` resolves the path fresh.
       - ./secrets:/secrets:ro
+
+    # Hardening — copied from the home-energy-manager pattern. None of
+    # this is strictly required for correctness, but it makes the
+    # blast radius of a vulnerability tighter and is cheap to add.
+    read_only: true
+    tmpfs:
+      - /tmp:rw,size=64M,mode=1777   # Pillow / requests / google-auth need a scratch dir
+    cap_drop: ["ALL"]
+    security_opt:
+      - no-new-privileges:true
+
+    # Resource limits. Idle is 0 MB (no idle container exists). Active
+    # peak is dominated by the largest photo uploaded — a few MB.
+    # 256 MB hard limit, 64 MB reservation gives plenty of headroom.
+    mem_limit: 256m
+    mem_reservation: 64m
+
+    # Logs to systemd journal (consistent with other services on the
+    # host); avoids unbounded growth of per-container JSON log files.
+    logging:
+      driver: journald
+      options:
+        tag: tapestry
+
     environment:
       - TZ=Europe/London
