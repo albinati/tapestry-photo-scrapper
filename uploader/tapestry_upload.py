@@ -548,6 +548,8 @@ def main():
         kept = 0
         kept_names = []
         for child_dir in PHOTO_DIRS.values():
+            if not child_dir.exists():
+                continue
             for f in list(child_dir.iterdir()):
                 if f.suffix.lower() not in (".jpg", ".jpeg", ".png"):
                     continue
