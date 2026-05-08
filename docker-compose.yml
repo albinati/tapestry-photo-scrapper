@@ -32,6 +32,12 @@ services:
       - ./.env:/app/.env:ro
       - ./config.toml:/app/config.toml:ro
       - ./data:/app/data
-      - ./secrets/token.json:/secrets/token.json:ro
+      # Bind the secrets *directory*, not the single token.json file:
+      # docker caches a single-file bind-mount's inode, so an external
+      # refresh process that rewrites the file (atomic replace, common
+      # for token rotators) would be invisible to the container. Mounting
+      # the directory means each read inside the container resolves the
+      # path fresh.
+      - ./secrets:/secrets:ro
     environment:
       - TZ=Europe/London
