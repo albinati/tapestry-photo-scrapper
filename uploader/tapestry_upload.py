@@ -143,6 +143,8 @@ ONLY_RECENT = os.environ.get("UPLOAD_ONLY_RECENT", "1") != "0"
 def build_matches(child: str):
     photo_dir = PHOTO_DIRS[child]
     diary_dir = DIARY_DIRS[child]
+    if not photo_dir.exists() or not diary_dir.exists():
+        return [], []
 
     # Build diary slug → file map
     # For children with only undated files (01-----202_), include those
@@ -305,7 +307,15 @@ def get_or_create_album(token: str, title: str) -> str:
 
 
 def list_album_filenames(token: str, album_id: str) -> set:
-    """Return set of filenames already in the album. Used to dedupe uploads."""
+    """Return set of filenames already in the album. Used to dedupe uploads.
+
+    Best-effort. Post-March-2025, `mediaItems:search` 403s for unverified
+    apps even with `photoslibrary.readonly`. When that happens we return
+    an empty set; the in-run dedupe (content-hash and same-filename
+    tracking as we upload) plus the scrape-side watermark in state.json
+    keep things idempotent enough — re-runs with no new observations
+    are no-ops because the scraper itself returns nothing.
+    """
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     seen = set()
     page_token = None
