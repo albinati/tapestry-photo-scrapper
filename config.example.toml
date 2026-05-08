@@ -1,0 +1,46 @@
+# Copy to config.toml and fill in. Real config.toml is gitignored.
+
+[tapestry]
+# The school's Tapestry slug — the trailing path component of the URL.
+# https://tapestryjournal.com/s/<school_slug>
+school_slug = "your-school-slug"
+
+[paths]
+# Where photos and diary markdown files live. Tilde expansion is supported.
+# Defaults to the directory containing this config file.
+# data_root = "~/tapestry"
+
+# One [[children]] block per child you want to track. `api_name` must match
+# the `fullName` returned by Tapestry's /api/4/observations/list exactly.
+[[children]]
+api_name = "First Last"
+folder   = "FirstName"           # local folder name (no spaces)
+display  = "First"                # short name used in Google Photos captions
+dob      = "2020-01-15"           # YYYY-MM-DD — used for "Xy Ym old" labels
+
+[[children]]
+api_name = "Sibling Last"
+folder   = "Sibling"
+display  = "Sibling"
+dob      = "2022-07-30"
+
+# Optional aliases — if Tapestry returns multiple variants of a child's name,
+# add them here so they all map to the same folder.
+# [[name_aliases]]
+# api_name = "First Middle Last"
+# folder   = "FirstName"
+
+[google_photos]
+album_title       = "Tapestry"
+credentials_path  = "~/.config/google/credentials.json"
+token_path        = "~/.config/google/token.json"
+# Observations authored by these names are skipped during upload — typically
+# parents whose photos are already in other Google Photos albums uploaded
+# directly from a phone.
+family_authors    = []
+
+[scraper]
+# Optional safety floor: never fetch observations whose createdAt is older
+# than this date (YYYY-MM-DD). Primarily a backstop — the watermark in
+# state.json normally controls where the scraper stops.
+# cutoff_date = "2024-01-01"

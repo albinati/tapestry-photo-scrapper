@@ -1,0 +1,25 @@
+# Secrets
+.env
+config.toml
+
+# Runtime data — children's diaries, photos, reports
+tapestry-photos/
+tapestry-diary/
+REPORT_*.md
+state.json
+scrape_summary.json
+
+# OAuth-related debugging artifacts
+/tmp/
+*.log
+__pycache__/
+*.pyc
+.venv/
+venv/
+.python-version
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
+
