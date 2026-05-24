@@ -200,10 +200,10 @@ def save_for_child(s: requests.Session, obs: dict, child: dict):
         diary_path.write_text(render_markdown(obs, full), encoding="utf-8")
         actions["diary_written"] = True
 
-    # Family-authored observations (Karol / Luis) are vacation/home photos
-    # the parents already have on their phones and in their main Google
-    # Photos library. The uploader skips them anyway; skipping here avoids
-    # downloading dozens of MB we'd just delete after the upload run.
+    # Family-authored observations are vacation/home photos the parents
+    # already have on their phones and in their main Google Photos library.
+    # The uploader skips them anyway; skipping here avoids downloading
+    # dozens of MB we'd just delete after the upload run.
     author_name = (obs.get("author") or {}).get("fullName")
     if author_name in CFG.family_authors:
         actions["family_authored"] = True

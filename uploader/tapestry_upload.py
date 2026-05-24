@@ -53,8 +53,8 @@ def get_access_token() -> str:
         except Exception as e:
             raise RuntimeError(
                 "Google token refresh failed (refresh_token may be revoked). "
-                "Wait for OpenClaw's weekly renewal cron (Mon 10 AM London) or "
-                "ping Luis to run reauth.py renew personal manually. "
+                "Wait for the weekly renewal cron (Mon 10 AM London) or "
+                "run uploader/reauth.py manually. "
                 f"Underlying error: {e}"
             ) from e
     return creds.token
