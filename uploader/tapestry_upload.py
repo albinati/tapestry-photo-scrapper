@@ -356,7 +356,7 @@ def upload_photo(token: str, photo_path: Path, description: str) -> str | None:
     return r.text.strip()
 
 
-def create_media_item(token: str, upload_token: str, description: str, album_id: str) -> tuple[bool, str | None]:
+def create_media_item(token: str, upload_token: str, description: str, album_id: str) -> tuple[bool, str | None, str | None]:
     """Create a media item in the user's library AND add it to the album.
 
     Quirk: if the upload bytes match content already present in the user's
@@ -368,7 +368,10 @@ def create_media_item(token: str, upload_token: str, description: str, album_id:
     items live in the user's main library and can only be added to the
     album by the user via the UI.
 
-    Returns (added_to_album, reason_if_not).
+    Returns (added_to_album, reason_if_not, media_item_id). The id is
+    returned even when the album-add fails, so the caller can record the
+    content hash in the dedup ledger and avoid re-uploading the bytes on a
+    later run.
     """
     headers = {"Authorization": f"Bearer {token}", "Content-Type": "application/json"}
     body = {
@@ -381,26 +384,27 @@ def create_media_item(token: str, upload_token: str, description: str, album_id:
     r = requests.post("https://photoslibrary.googleapis.com/v1/mediaItems:batchCreate",
         headers=headers, json=body)
     if not r.ok:
-        return (False, f"batchCreate {r.status_code}: {r.text[:200]}")
+        return (False, f"batchCreate {r.status_code}: {r.text[:200]}", None)
     results = r.json().get("newMediaItemResults", [])
     if not results:
-        return (False, "no result")
+        return (False, "no result", None)
     res0 = results[0]
     status = res0.get("status", {})
     msg = status.get("message", "OK")
     if msg not in ("OK", "Success", ""):
-        return (False, f"status={msg}")
+        return (False, f"status={msg}", None)
     item = res0.get("mediaItem")
     if not item:
-        return (False, "no mediaItem")
+        return (False, "no mediaItem", None)
+    media_id = item["id"]
     # Explicit add to album to bypass the library-dup quirk
     add_url = f"https://photoslibrary.googleapis.com/v1/albums/{album_id}:batchAddMediaItems"
-    r2 = requests.post(add_url, headers=headers, json={"mediaItemIds": [item["id"]]})
+    r2 = requests.post(add_url, headers=headers, json={"mediaItemIds": [media_id]})
     if r2.ok:
-        return (True, None)
+        return (True, None, media_id)
     # 400 INVALID_ARGUMENT typically means the item already existed in the
     # user's library (created by another app) and we can't add it via API.
-    return (False, f"library-dup (cannot add via API): {r2.status_code}")
+    return (False, f"library-dup (cannot add via API): {r2.status_code}", media_id)
 
 
 # ── Main ──────────────────────────────────────────────────────────────────────
@@ -429,18 +433,24 @@ def author_of_diary(diary_file: Path) -> str | None:
     return m.group(1).strip() if m else None
 
 
-def build_chronological_queue(already: set):
+def build_chronological_queue(already: set, ledger: set):
     """Return one chronologically-sorted list of upload jobs across all
-    configured children, deduplicated against the album by filename and
-    against itself by content hash (so a photo present in more than one
-    child's folder uploads only once). Each job:
-    (sort_key, name, photo, child, diary_file_or_none, photo_date).
+    configured children, deduplicated:
+      - against the album by filename (``already`` — best-effort; empty when
+        mediaItems:search 403s for this unverified app),
+      - against a persistent content-hash ledger of everything we've already
+        uploaded (``ledger`` — survives photo-dir resets and the 403, so it's
+        the real idempotency guarantee),
+      - and against itself by content hash (a photo present in more than one
+        child's folder uploads only once).
+    Each job: (sort_key, name, photo, child, diary_file_or_none, photo_date, md5).
     """
     seen_hashes = set()           # content-hashes we'll upload exactly once
     jobs = []                     # collected jobs to sort
     skipped_in_album = 0
     skipped_self_dup = 0
     skipped_family = 0
+    skipped_ledger = 0
 
     for child in [c.folder for c in CFG.children]:
         matches, unmatched = build_matches(child)
@@ -452,25 +462,31 @@ def build_chronological_queue(already: set):
                 skipped_family += 1
                 continue
             h = file_md5(p)
+            if h in ledger:
+                skipped_ledger += 1
+                continue
             if h in seen_hashes:
                 skipped_self_dup += 1
                 continue
             seen_hashes.add(h)
-            jobs.append((photo_date, p.name, p, child, diary, photo_date))
+            jobs.append((photo_date, p.name, p, child, diary, photo_date, h))
         for p, photo_date in unmatched:
             if p.name in already:
                 skipped_in_album += 1
                 continue
             h = file_md5(p)
+            if h in ledger:
+                skipped_ledger += 1
+                continue
             if h in seen_hashes:
                 skipped_self_dup += 1
                 continue
             seen_hashes.add(h)
-            jobs.append((photo_date, p.name, p, child, None, photo_date))
+            jobs.append((photo_date, p.name, p, child, None, photo_date, h))
 
     # Chronological by photo_date, then by filename for stable ordering within day.
     jobs.sort(key=lambda j: (j[0] or date.min, j[1]))
-    return jobs, skipped_in_album, skipped_self_dup, skipped_family
+    return jobs, skipped_in_album, skipped_self_dup, skipped_family, skipped_ledger
 
 
 def main():
@@ -484,16 +500,26 @@ def main():
     already = list_album_filenames(token, album_id)
     print(f"   Album already contains {len(already)} unique filenames")
 
-    print("🧮 Building chronological queue (cross-kid content-dedup, family-author skip)...")
-    jobs, skipped_album, skipped_self, skipped_family = build_chronological_queue(already)
+    # Persistent content-hash ledger of everything already uploaded. This is
+    # the real idempotency guarantee — it survives photo-dir resets and the
+    # mediaItems:search 403 that leaves `already` empty.
+    state = _read_state()
+    ledger = state.get("uploaded_hashes") or {}
+    print(f"📒 Dedup ledger: {len(ledger)} previously-uploaded hashes")
+
+    print("🧮 Building chronological queue (ledger + cross-kid content-dedup, family-author skip)...")
+    jobs, skipped_album, skipped_self, skipped_family, skipped_ledger = \
+        build_chronological_queue(already, set(ledger.keys()))
     print(f"   Queue: {len(jobs)} | skipped (in album): {skipped_album} | "
+          f"skipped (already uploaded — ledger): {skipped_ledger} | "
           f"skipped (cross-kid dup content): {skipped_self} | "
           f"skipped (family-authored): {skipped_family}")
 
     total_uploaded = 0
     total_failed = 0
+    new_ledger: dict = {}        # hashes uploaded this run, persisted at the end
 
-    for i, (_, _, photo, child, diary, photo_date) in enumerate(jobs, 1):
+    for i, (_, _, photo, child, diary, photo_date, h) in enumerate(jobs, 1):
         if diary is not None:
             notes, comments = read_diary(diary)
             title = title_for_diary(diary)
@@ -513,14 +539,34 @@ def main():
         if not upload_token:
             total_failed += 1
             continue
-        ok, reason = create_media_item(token, upload_token, description, album_id)
+        ok, reason, media_id = create_media_item(token, upload_token, description, album_id)
         if ok:
             total_uploaded += 1
             already.add(photo.name)
         else:
             total_failed += 1
             print(f"     ⚠️  not added to album: {reason}")
+        # Record any successfully-created library item (even one we couldn't
+        # add to the album) so we never re-upload these bytes on a later run.
+        if media_id:
+            new_ledger[h] = {
+                "filename": photo.name,
+                "mediaItemId": media_id,
+                "added_to_album": ok,
+                "uploaded_at": datetime.now(timezone.utc).isoformat(),
+            }
         time.sleep(0.3)
+
+    # Persist the ledger immediately (independent of the cleanup block below,
+    # which is skippable via UPLOAD_KEEP_LOCAL). Merge into a freshly-read
+    # state so we don't clobber a concurrent writer.
+    if new_ledger:
+        state = _read_state()
+        merged = state.get("uploaded_hashes") or {}
+        merged.update(new_ledger)
+        state["uploaded_hashes"] = merged
+        _write_state(state)
+        print(f"📒 Ledger updated: +{len(new_ledger)} (total {len(merged)})")
 
     print(f"\n✅ Done! Uploaded {total_uploaded}. Failed {total_failed}. "
           f"Skipped {skipped_album} already-in-album, {skipped_self} cross-kid content dups, "
